@@ -145,9 +145,10 @@ def run_one_realization(N: int, TT: int, beta: float, alpha: float, sigma: float
         infected_mask = state > 0
         symptomatic_infected_mask = infected_mask & symptomatic
         asymptomatic_infected_mask = infected_mask & ~symptomatic
-        linum_sym = A.dot(symptomatic_infected_mask.astype(np.float64))
-        linum_asym = A.dot(asymptomatic_infected_mask.astype(np.float64))
+        linum_sym = A.dot(symptomatic_infected_mask.astype(np.float64)) # how many symptomatic infected neighbors?
+        linum_asym = A.dot(asymptomatic_infected_mask.astype(np.float64)) # how many asymptomatic infected neighbors?
 
+        # Infection Events
         susceptible_idx = np.where(state == -1)[0]
         if susceptible_idx.size:
             escape_prob = ((1.0 - beta_effective_sym) ** linum_sym[susceptible_idx]
