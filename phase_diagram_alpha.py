@@ -1,7 +1,8 @@
 """
 phase_diagram_alpha.py
 =======================
-Python translation of PhaseDiagramSIR_alpha.cpp and PhaseDiagramSIS_alpha.cpp.
+Python translation of PhaseDiagramSIR_alpha.cpp and PhaseDiagramSIS_alpha.cpp,
+plus an SIRS extension.
 
 Model ("alpha-mutation"): pathogen fitness Psi affects the HOST's recovery
 rate. An infected node i recovers with probability alpha/Psi[i] each step.
@@ -9,16 +10,19 @@ Fitness is inherited uniformly at random from one of the infecting node's
 already-infected neighbours, and then undergoes a small Gaussian-like
 random walk (see common.fitness_random_walk) every step it stays infected.
 
-state encoding (float array), same as the original:
+state encoding (float array), matching the original where applicable:
     -1  susceptible
     +1  infected
-    -2  recovered   (SIR only; SIS recycles recovered nodes back to -1)
+    -2  recovered   (SIR/SIRS only; SIS recycles recovered nodes back to -1)
 
-Two dynamics share this file:
+Three dynamics share this file:
     SIR: recovered nodes go to -2 and never return to susceptible.
          Outbreak criterion: R/N >= 0.2 at the end of the run.
     SIS: recovered nodes go straight back to -1 (susceptible again).
          Outbreak criterion: I/N >= 0.2 at the end of the run.
+   SIRS: recovered nodes go to -2, then lose immunity with probability omega
+         each step and return to -1. Outbreak criterion: I/N >= 0.2 at the
+         end of the run, since R is a transient compartment.
 
 For each (beta, sigma) pair, `n_realizations` independent runs are
 simulated (fresh network + fresh epidemic each time) and the fraction that
@@ -73,13 +77,16 @@ def run_one_realization(N: int, TT: int, beta: float, alpha: float, sigma: float
                          num_edges: int, rng: np.random.Generator,
                          avoidance: float = 0.0, distancing: float = 0.0,
                          symptomatic_fraction: float = 1.0,
+                         omega: float = 0.01,
                          track_timeseries: bool = False):
     """Simulate one epidemic realization.
 
     Returns (final_infected_frac, final_recovered_frac) -- for SIS,
     final_recovered_frac is always 0 since recovered nodes are recycled to
-    susceptible immediately. If `track_timeseries=True`, a third element is
-    returned: a dict of per-timestep arrays (see below).
+    susceptible immediately. For SIRS it is the current recovered fraction,
+    not cumulative infections, because immunity loss makes recovered a
+    transient state. If `track_timeseries=True`, a third element is returned:
+    a dict of per-timestep arrays (see below).
 
     Symptomatic vs. asymptomatic infections
     ----------------------------------------
@@ -127,7 +134,7 @@ def run_one_realization(N: int, TT: int, beta: float, alpha: float, sigma: float
     state[:n0] = 1.0
     symptomatic[:n0] = rng.random(n0) < symptomatic_fraction
 
-    recover_state = -2.0 if dynamics == "SIR" else -1.0
+    recover_state = -1.0 if dynamics == "SIS" else -2.0
 
     if track_timeseries:
         cumulative_infections = np.empty(TT, dtype=np.float64)
@@ -143,6 +150,7 @@ def run_one_realization(N: int, TT: int, beta: float, alpha: float, sigma: float
 
     for t in range(TT):
         infected_mask = state > 0
+        recovered_mask = state < -1.5
         symptomatic_infected_mask = infected_mask & symptomatic
         asymptomatic_infected_mask = infected_mask & ~symptomatic
         linum_sym = A.dot(symptomatic_infected_mask.astype(np.float64)) # how many symptomatic infected neighbors?
@@ -177,6 +185,17 @@ def run_one_realization(N: int, TT: int, beta: float, alpha: float, sigma: float
                 recovery_prob = alpha / psi[infected_idx]
             recovering = infected_idx[draws2 < recovery_prob]
             state[recovering] = recover_state
+            symptomatic[recovering] = False
+
+        # SIRS immunity loss: only nodes recovered at the start of this
+        # step are eligible, keeping the update synchronous with infection
+        # and recovery above.
+        if dynamics == "SIRS":
+            recovered_idx = np.where(recovered_mask)[0]
+            if recovered_idx.size:
+                draws3 = rng.random(recovered_idx.shape[0])
+                losing_immunity = recovered_idx[draws3 < omega]
+                state[losing_immunity] = -1.0
 
         # Fitness random walk applies to everyone infected *after* this
         # step's transitions (matches the original's separate stats loop).
@@ -200,7 +219,7 @@ def run_one_realization(N: int, TT: int, beta: float, alpha: float, sigma: float
             susceptible_remaining[t] = np.count_nonzero(state == -1)
 
     I = float(np.sum(state > 0))
-    RR = float(np.sum(state < -1.5)) if dynamics == "SIR" else 0.0
+    RR = float(np.sum(state < -1.5)) if dynamics in ("SIR", "SIRS") else 0.0
     if track_timeseries:
         return I / N, RR / N, {
             "cumulative_infections": cumulative_infections,
@@ -219,8 +238,9 @@ def run_phase_diagram(dynamics: str, out_path: str, N: int, TT: int,
                        sigmas: np.ndarray, betas: np.ndarray, num_edges: int,
                        burn_in: int, seed: int | None, verbose: bool = True,
                        avoidance: float = 0.0, distancing: float = 0.0,
-                       symptomatic_fraction: float = 1.0):
-    assert dynamics in ("SIR", "SIS")
+                       symptomatic_fraction: float = 1.0,
+                       omega: float = 0.01):
+    assert dynamics in ("SIR", "SIS", "SIRS")
     rng = np.random.default_rng(seed)
     t_start = _time.time()
     total = len(sigmas) * len(betas)
@@ -233,7 +253,8 @@ def run_phase_diagram(dynamics: str, out_path: str, N: int, TT: int,
                     frac_I, frac_R = run_one_realization(
                         N, TT, beta, alpha, sigma, X, psi_cap, dynamics,
                         burn_in, num_edges, rng, avoidance=avoidance,
-                        distancing=distancing, symptomatic_fraction=symptomatic_fraction)
+                        distancing=distancing, symptomatic_fraction=symptomatic_fraction,
+                        omega=omega)
                     outbreak_metric = frac_R if dynamics == "SIR" else frac_I
                     if outbreak_metric >= 0.2:
                         count2 += 1
@@ -256,6 +277,8 @@ def build_arg_parser(default_psi_cap: float, prog: str) -> argparse.ArgumentPars
     p.add_argument("--realizations", type=int, default=50,
                     help="Monte Carlo realizations per (beta, sigma) pair")
     p.add_argument("--alpha", type=float, default=0.1, help="baseline recovery rate")
+    p.add_argument("--omega", type=float, default=0.01,
+                    help="SIRS immunity-loss probability per step; ignored by SIR/SIS")
     p.add_argument("--X", type=float, default=0.0, help="mean drift of fitness random walk")
     p.add_argument("--psi-cap", type=float, default=default_psi_cap,
                     help="upper clip for fitness Psi")
@@ -320,7 +343,8 @@ def main(dynamics: str, default_psi_cap: float, prog: str):
         psi_cap=args.psi_cap, sigmas=sigmas, betas=betas,
         num_edges=args.num_edges, burn_in=args.burn_in, seed=args.seed,
         avoidance=args.avoidance, distancing=args.distancing,
-        symptomatic_fraction=args.symptomatic_fraction, verbose=not args.quiet)
+        symptomatic_fraction=args.symptomatic_fraction, omega=args.omega,
+        verbose=not args.quiet)
 
 
 if __name__ == "__main__":

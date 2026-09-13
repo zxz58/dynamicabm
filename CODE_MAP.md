@@ -51,6 +51,8 @@ Model:
 - States are `-1` susceptible, `1` infected, and `-2` recovered.
 - SIR recovery moves nodes to `-2`.
 - SIS recovery recycles nodes to `-1`.
+- SIRS recovery moves nodes to `-2`, then `--omega` returns recovered nodes
+  to susceptible.
 - Recovery probability is `alpha / Psi[i]`.
 - Transmission uses fixed `beta`, with optional `avoidance`, `distancing`,
   and symptomatic/asymptomatic behavior.
@@ -116,6 +118,8 @@ phase-diagram engines.
 - `PhaseDiagramSIR_alpha.py`: calls `phase_diagram_alpha.main("SIR", ...)`
   with `Psi` cap `20`.
 - `PhaseDiagramSIS_alpha.py`: calls `phase_diagram_alpha.main("SIS", ...)`
+  with `Psi` cap `20`.
+- `PhaseDiagramSIRS_alpha.py`: calls `phase_diagram_alpha.main("SIRS", ...)`
   with `Psi` cap `20`.
 - `PhaseDiagramSIR_beta.py`: calls `phase_diagram_beta.main("SIR", ...)`
   with `Psi` cap `10`.
