@@ -168,6 +168,30 @@ Outputs:
 - CSV, default `timeseries.csv`
 - PNG plot, default path derived from the CSV name
 
+## Endemic Community SIRS
+
+### `community_sirs.py` / `CommunitySIRS.py`
+
+Focused SIRS ABM for endemic virulence evolution on 2 or 3 clustered
+communities.
+
+Model:
+
+- Local communities are Watts-Strogatz graphs with configurable `--kbar` and
+  `--rewiring-prob`.
+- States are `S=0`, `I=1`, `R=2`, and `D=3`.
+- Gillespie events cover transmission, recovery, waning immunity,
+  disease-induced mortality, behavioral edge removal, and inter-community
+  movement.
+- Virulence mutates at transmission and controls beta, alpha, gamma, delta,
+  and phi through linear/concave/convex trade-off shapes.
+
+Output:
+
+- CSV, default `community_sirs_summary.csv`
+- One row per realization with burn-in steady-state summaries and final state
+  metrics.
+
 ## Standalone Experiments
 
 ### `TimingMitigation.py`
