@@ -8,6 +8,17 @@ The model uses continuous-time Gillespie dynamics. Hosts live in two or
 three Watts-Strogatz communities. Virulence is a heritable continuous
 phenotype assigned at infection and controls transmission, recovery,
 disease mortality, behavioral edge removal, and inter-community movement.
+
+The main implementation idea is:
+
+1. Build an initial local contact graph inside each community.
+2. Keep a mutable active graph as sets of neighbors, because edges are added
+   and removed during the simulation.
+3. At each Gillespie step, enumerate all currently possible events and their
+   rates, draw the waiting time, then draw exactly one event proportional to
+   its rate.
+4. Record regularly spaced samples after burn-in so endemic behavior can be
+   summarized and plotted.
 """
 from __future__ import annotations
 
@@ -32,6 +43,15 @@ STATE_D = 3
 
 @dataclass(frozen=True)
 class TradeoffParams:
+    """Bounds and shape choices for mapping virulence into event rates.
+
+    The simulation stores virulence as one scalar per host. These parameters
+    define how that scalar becomes biologically meaningful event rates:
+    beta, alpha, gamma, delta, and phi. Keeping the mapping in one dataclass
+    makes sensitivity analysis easier, because a future sweep can vary these
+    fields without changing the Gillespie logic.
+    """
+
     v_min: float
     v_max: float
     beta_min: float
@@ -50,6 +70,8 @@ class TradeoffParams:
     phi_shape: str
 
 
+# One row per realization. These are the quantities most useful for endemic
+# steady-state comparison across seeds or later sensitivity-analysis grids.
 SUMMARY_FIELDS = [
     "realization",
     "seed",
@@ -78,6 +100,9 @@ SUMMARY_FIELDS = [
     "realized_clustering",
 ]
 
+# Per-sample rows are intentionally richer than summary rows. Plotting and
+# snapshot tooling should read these instead of trying to reconstruct state
+# from one-row-per-realization summaries.
 SAMPLE_FIELDS = [
     "realization",
     "seed",
@@ -101,10 +126,18 @@ SAMPLE_FIELDS = [
 
 
 def _edge(u: int, v: int) -> tuple[int, int]:
+    """Canonicalize an undirected edge so it can be stored in a set."""
     return (u, v) if u < v else (v, u)
 
 
 def split_communities(N: int, K: int) -> tuple[np.ndarray, list[np.ndarray]]:
+    """Assign hosts to K communities as evenly as integer sizes allow.
+
+    Returns both a per-node community_id array and a list of node arrays. The
+    first form is convenient for quickly testing whether an edge is local or
+    inter-community; the second is convenient when drawing a random movement
+    partner from a different community.
+    """
     sizes = [N // K + (1 if c < (N % K) else 0) for c in range(K)]
     community_id = np.empty(N, dtype=np.int64)
     communities: list[np.ndarray] = []
@@ -121,11 +154,16 @@ def build_community_graph(N: int, K: int, kbar: int, rewiring_prob: float,
                           seed: int | None):
     """
     Build disjoint Watts-Strogatz communities and adjacency sets.
+
     N: total number of nodes
     K: number of communities
     kbar: target local degree inside each community. 
         Higher kbar means denser local communities. Lower kbar means sparser communities.
     rewiring_prob: This controls how locally clustered vs random the within-community graph is.
+
+    The graph starts with only within-community contacts. Inter-community
+    contacts appear later through movement events, so the model can distinguish
+    stable local social structure from transient long-range connectivity.
     """
     community_id, communities = split_communities(N, K)
     # active_adj is the mutable contact network used by Gillespie events;
@@ -159,7 +197,12 @@ def build_community_graph(N: int, K: int, kbar: int, rewiring_prob: float,
 
 
 def active_edges(active_adj: list[set[int]]) -> set[tuple[int, int]]:
-    """Return current usable contact edges without double-counting."""
+    """Return current usable contact edges without double-counting.
+
+    active_adj stores each undirected edge twice, once in each endpoint's
+    neighbor set. Most model calculations need each edge once, so this helper
+    canonicalizes edges as u < v.
+    """
     out = set()
     for u, neigh in enumerate(active_adj):
         for v in neigh:
@@ -169,7 +212,12 @@ def active_edges(active_adj: list[set[int]]) -> set[tuple[int, int]]:
 
 
 def realized_clustering(active_adj: list[set[int]], alive_mask: np.ndarray) -> float:
-    """Compute clustering on the active network after removing dead hosts."""
+    """Compute clustering on the active network after removing dead hosts.
+
+    Clustering is reported on the graph that disease processes can actually
+    use at that time. Dead hosts are excluded because mortality permanently
+    removes them and their incident edges from the contact network.
+    """
     G = nx.Graph()
     alive_nodes = np.where(alive_mask)[0].tolist()
     G.add_nodes_from(alive_nodes)
@@ -182,6 +230,13 @@ def realized_clustering(active_adj: list[set[int]], alive_mask: np.ndarray) -> f
 
 
 def shape_value(z: np.ndarray | float, shape: str) -> np.ndarray | float:
+    """Apply the requested sensitivity shape on normalized virulence z.
+
+    z is always clipped into [0, 1]. The shapes are intentionally simple:
+    linear gives a straight trade-off, concave gives diminishing returns, and
+    convex gives weak effects at low virulence with stronger effects near the
+    upper end of the phenotype range.
+    """
     z = np.clip(z, 0.0, 1.0)
     if shape == "linear":
         return z
@@ -194,7 +249,13 @@ def shape_value(z: np.ndarray | float, shape: str) -> np.ndarray | float:
 
 def bounded_tradeoff(v: np.ndarray | float, params: TradeoffParams, low: float,
                      high: float, shape: str, increasing: bool) -> np.ndarray | float:
-    """Convert virulence into a bounded rate with controlled shape/direction."""
+    """Convert virulence into a bounded rate with controlled shape/direction.
+
+    This is the shared transformation for every virulence-dependent rate. It
+    first normalizes v to the phenotype interval, applies the chosen curve, and
+    then maps that curve onto [low, high]. For decreasing trade-offs, the curve
+    is flipped so high virulence produces lower rates.
+    """
     denom = params.v_max - params.v_min
     if denom <= 0:
         raise ValueError("v_max must be greater than v_min")
@@ -206,26 +267,31 @@ def bounded_tradeoff(v: np.ndarray | float, params: TradeoffParams, low: float,
 
 
 def beta_of(v, params: TradeoffParams):
+    """Per-contact transmission rate; higher virulence transmits better."""
     return bounded_tradeoff(v, params, params.beta_min, params.beta_max,
                             params.beta_shape, increasing=True)
 
 
 def alpha_of(v, params: TradeoffParams):
+    """Disease-induced mortality rate; higher virulence is more lethal."""
     return bounded_tradeoff(v, params, params.alpha_min, params.alpha_max,
                             params.alpha_shape, increasing=True)
 
 
 def gamma_of(v, params: TradeoffParams):
+    """Recovery rate; higher virulence is harder to clear."""
     return bounded_tradeoff(v, params, params.gamma_min, params.gamma_max,
                             params.gamma_shape, increasing=False)
 
 
 def delta_of(v, params: TradeoffParams):
+    """Behavioral edge-removal rate; higher virulence induces more avoidance."""
     return bounded_tradeoff(v, params, params.delta_min, params.delta_max,
                             params.delta_shape, increasing=True)
 
 
 def phi_of(v, params: TradeoffParams):
+    """Inter-community movement rate; higher virulence reduces mobility."""
     return bounded_tradeoff(v, params, 0.0, params.phi_max,
                             params.phi_shape, increasing=False)
 
@@ -253,6 +319,12 @@ def remove_all_edges(i: int, active_adj: list[set[int]],
 def add_intercommunity_edge(i: int, state: np.ndarray, community_id: np.ndarray,
                             communities: list[np.ndarray], active_adj: list[set[int]],
                             rng: np.random.Generator, max_attempts: int = 25) -> bool:
+    """Add one long-range edge from host i to a random host in another community.
+
+    Movement is modeled as edge creation rather than moving a host between
+    communities. This keeps community membership fixed while allowing the
+    active contact graph to gain cross-community bridges over time.
+    """
     if state[i] == STATE_D:
         return False
     other_communities = [c for c in range(len(communities)) if c != community_id[i]]
@@ -273,11 +345,18 @@ def add_intercommunity_edge(i: int, state: np.ndarray, community_id: np.ndarray,
 
 
 def count_inter_edges(active_adj: list[set[int]], community_id: np.ndarray) -> int:
+    """Count currently active edges whose endpoints are in different communities."""
     return sum(1 for u, v in active_edges(active_adj) if community_id[u] != community_id[v])
 
 
 def summarize_state(t: float, state: np.ndarray, virulence: np.ndarray,
                     active_adj: list[set[int]], community_id: np.ndarray) -> dict[str, float]:
+    """Compute all per-timepoint metrics used by summaries, plots, and snapshots.
+
+    This function deliberately contains no random draws or state mutation. It
+    is safe to call at arbitrary sample or snapshot times and gives the same
+    definitions everywhere in the codebase.
+    """
     N = state.shape[0]
     infected = state == STATE_I
     s_count = int(np.count_nonzero(state == STATE_S))
@@ -312,6 +391,7 @@ def summarize_state(t: float, state: np.ndarray, virulence: np.ndarray,
 
 def choose_weighted_event(events: list[tuple[str, tuple, float]],
                           total_rate: float, rng: np.random.Generator):
+    """Draw one Gillespie event proportional to its event rate."""
     threshold = rng.random() * total_rate
     acc = 0.0
     for kind, payload, rate in events:
@@ -323,6 +403,13 @@ def choose_weighted_event(events: list[tuple[str, tuple, float]],
 
 def collect_events(state: np.ndarray, virulence: np.ndarray, active_adj: list[set[int]],
                    params: TradeoffParams, rho: float):
+    """Enumerate every event currently available to the Gillespie sampler.
+
+    The returned event list is explicit rather than optimized: each tuple is
+    (event_kind, payload, rate). That makes the model readable and easy to
+    audit. For larger simulations, this is the main place to optimize, because
+    it rebuilds the event list from the active graph at every event.
+    """
     events: list[tuple[str, tuple, float]] = []
 
     # Edge-local events: transmission along S-I contacts and behavioral
@@ -354,9 +441,13 @@ def collect_events(state: np.ndarray, virulence: np.ndarray, active_adj: list[se
 
     alive_idx = np.where(state != STATE_D)[0]
     for i in alive_idx:
+        # Infectious hosts move according to their virulence-dependent phi(v).
+        # Susceptible and recovered hosts use phi_max, matching the model text.
         rate = float(phi_of(virulence[i], params)) if state[i] == STATE_I else params.phi_max
         events.append(("movement", (int(i),), rate))
 
+    # Zero-rate events are harmless conceptually but would distort the event
+    # picker if total_rate and the list disagreed, so filter them once here.
     total_rate = sum(rate for _, _, rate in events if rate > 0.0)
     if total_rate <= 0.0:
         return [], 0.0
@@ -367,6 +458,12 @@ def collect_events(state: np.ndarray, virulence: np.ndarray, active_adj: list[se
 def snapshot_state(t: float, state: np.ndarray, virulence: np.ndarray,
                    active_adj: list[set[int]], community_id: np.ndarray,
                    cumulative_deaths: int) -> dict:
+    """Copy mutable simulation state for later network rendering.
+
+    active_adj is a list of mutable sets, so a shallow copy would continue to
+    change as the simulation runs. The deep copy freezes the graph exactly as
+    it looked at the requested snapshot time.
+    """
     return {
         "t": t,
         "state": state.copy(),
@@ -379,6 +476,12 @@ def snapshot_state(t: float, state: np.ndarray, virulence: np.ndarray,
 
 def add_sample_context(sample: dict[str, float], realization: int,
                        seed_value: int | str, cumulative_deaths: int) -> dict:
+    """Attach run metadata to one sampled state row.
+
+    The plotting script expects each row to be self-contained: it should know
+    which realization it came from, what seed generated that realization, and
+    how many deaths had accumulated by that sample time.
+    """
     row = {
         "realization": realization,
         "seed": seed_value,
@@ -392,6 +495,12 @@ def add_sample_context(sample: dict[str, float], realization: int,
 def run_one_realization(args, realization: int, rng: np.random.Generator,
                         return_samples: bool = False,
                         snapshot_times: list[float] | None = None):
+    """Run one stochastic realization and return summary/sample/snapshot data.
+
+    This function is the model's main state machine. It owns the mutable host
+    arrays and active graph, while helper functions handle rate construction,
+    event selection, and metric calculation.
+    """
     params = TradeoffParams(
         v_min=args.v_min, v_max=args.v_max,
         beta_min=args.beta_min, beta_max=args.beta_max,
@@ -412,6 +521,8 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
     infection_count = np.zeros(args.N, dtype=np.int64)
     severed_edges = [set() for _ in range(args.N)]
 
+    # Seed the endemic simulation with a small infected fraction. Setting
+    # --initial-prevalence 0 is allowed for extinction/output sanity checks.
     n_initial = int(round(args.initial_prevalence * args.N))
     if args.initial_prevalence > 0.0:
         n_initial = max(1, n_initial)
@@ -432,6 +543,7 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
     next_snapshot = 0
 
     def capture_samples_until(limit: float):
+        """Record regularly spaced samples up to a continuous-time limit."""
         nonlocal next_sample
         while next_sample <= limit:
             sample = summarize_state(next_sample, state, virulence, active_adj, community_id)
@@ -442,6 +554,7 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
             next_sample += args.sample_interval
 
     def capture_snapshots_until(limit: float):
+        """Freeze graph/host state for all requested snapshots reached so far."""
         nonlocal next_snapshot
         while next_snapshot < len(requested_snapshots) and requested_snapshots[next_snapshot] <= limit:
             snapshots.append(snapshot_state(
@@ -450,9 +563,11 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
             next_snapshot += 1
 
     while t < args.t_max:
+        # Gillespie step 1: compute the total event rate in the current state.
         events, total_rate = collect_events(state, virulence, active_adj, params, args.rho)
         if total_rate <= 0.0:
             break
+        # Gillespie step 2: draw the waiting time until the next event.
         t_next = t + float(rng.exponential(1.0 / total_rate))
         event_limit = min(t_next, args.t_max)
 
@@ -464,11 +579,14 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
             t = args.t_max
             break
         t = t_next
+        # Gillespie step 3: choose which event fires at time t.
         kind, payload = choose_weighted_event(events, total_rate, rng)
 
         if kind == "transmission":
             susceptible, source = payload
             if state[susceptible] == STATE_S and state[source] == STATE_I:
+                # Payload order is (new host, infecting host). Only the source
+                # strain determines offspring virulence.
                 state[susceptible] = STATE_I
                 infection_count[susceptible] += 1
                 # Virulence is inherited from the source strain with mutation.
@@ -478,17 +596,21 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
         elif kind == "recovery":
             (i,) = payload
             if state[i] == STATE_I:
+                # Recovered hosts retain immunity until a later waning event.
                 state[i] = STATE_R
                 restore_edges(i, state, active_adj, severed_edges)
         elif kind == "mortality":
             (i,) = payload
             if state[i] == STATE_I:
+                # Deaths are permanent in this version: no birth or replacement
+                # process replenishes the host population.
                 state[i] = STATE_D
                 cumulative_deaths += 1
                 remove_all_edges(i, active_adj, severed_edges)
         elif kind == "waning":
             (i,) = payload
             if state[i] == STATE_R:
+                # Waning restores susceptibility but does not alter contacts.
                 state[i] = STATE_S
         elif kind == "edge_removal":
             u, v, owner = payload
@@ -500,8 +622,12 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
                 severed_edges[owner].add(_edge(u, v))
         elif kind == "movement":
             (i,) = payload
+            # Failed movement attempts are allowed; they simply mean no new
+            # valid cross-community contact was available for this draw.
             add_intercommunity_edge(i, state, community_id, communities, active_adj, rng)
 
+    # If the process ended early because no positive-rate events remain, still
+    # fill requested sample/snapshot times with the final frozen state.
     capture_samples_until(args.t_max)
     capture_snapshots_until(args.t_max)
 
@@ -510,6 +636,7 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
         extinct = 1
 
     def sample_mean(key: str) -> float:
+        """Average a metric over post-burn-in samples, ignoring NaNs."""
         vals = np.array([s[key] for s in samples], dtype=np.float64)
         if vals.size == 0:
             return math.nan
@@ -550,6 +677,7 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
 
 
 def run_sweep(args):
+    """Run independent realizations and collect summary plus optional samples."""
     rng = np.random.default_rng(args.seed)
     rows = []
     all_samples = []
@@ -573,6 +701,7 @@ def run_sweep(args):
 
 
 def build_arg_parser(prog: str = "CommunitySIRS") -> argparse.ArgumentParser:
+    """Define the public CLI shared by simulation and snapshot scripts."""
     p = argparse.ArgumentParser(prog=prog, description=__doc__)
     p.add_argument("--out", default="community_sirs_summary.csv",
                    help="output CSV path")
@@ -621,6 +750,7 @@ def build_arg_parser(prog: str = "CommunitySIRS") -> argparse.ArgumentParser:
 
 
 def validate_args(args):
+    """Fail fast on parameter combinations that would make the model invalid."""
     if args.N < args.K:
         raise SystemExit("--N must be at least --K")
     if args.v_max <= args.v_min:
@@ -647,6 +777,7 @@ def validate_args(args):
 
 
 def main(prog: str = "CommunitySIRS"):
+    """Parse CLI args, run simulations, and write requested CSV outputs."""
     parser = build_arg_parser(prog)
     args = parser.parse_args()
     validate_args(args)

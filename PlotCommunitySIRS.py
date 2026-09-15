@@ -12,6 +12,7 @@ import numpy as np
 
 
 def read_samples(path: str) -> dict[int, list[dict[str, float]]]:
+    """Load a CommunitySIRS --samples-out CSV grouped by realization."""
     by_realization: dict[int, list[dict[str, float]]] = defaultdict(list)
     with open(path, newline="") as fp:
         reader = csv.DictReader(fp)
@@ -29,6 +30,7 @@ def read_samples(path: str) -> dict[int, list[dict[str, float]]]:
 
 
 def aggregate(by_realization: dict[int, list[dict[str, float]]], metric: str):
+    """Compute mean and standard deviation across realizations at each time."""
     times = sorted({row["t"] for rows in by_realization.values() for row in rows})
     means = []
     stds = []
@@ -50,6 +52,7 @@ def aggregate(by_realization: dict[int, list[dict[str, float]]], metric: str):
 
 
 def plot_mean_with_band(ax, by_realization, metric: str, label: str, color: str):
+    """Draw one metric as a mean trajectory with optional realization spread."""
     t, mean, std = aggregate(by_realization, metric)
     ax.plot(t, mean, label=label, color=color, linewidth=1.8)
     if len(by_realization) > 1:
@@ -57,6 +60,7 @@ def plot_mean_with_band(ax, by_realization, metric: str, label: str, color: str)
 
 
 def make_plot(samples_path: str, out_path: str, burn_in_time: float | None):
+    """Create the four-panel steady-state diagnostic figure."""
     if not os.environ.get("MPLCONFIGDIR"):
         os.environ["MPLCONFIGDIR"] = tempfile.mkdtemp(prefix="matplotlib-")
     import matplotlib
@@ -102,6 +106,7 @@ def make_plot(samples_path: str, out_path: str, burn_in_time: float | None):
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
+    """Define the plotting CLI."""
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--samples", required=True, help="CommunitySIRS --samples-out CSV")
     p.add_argument("--out", default=None, help="output PNG path")
@@ -111,6 +116,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main():
+    """Read sample CSV and save the trajectory PNG."""
     args = build_arg_parser().parse_args()
     out_path = args.out
     if out_path is None:

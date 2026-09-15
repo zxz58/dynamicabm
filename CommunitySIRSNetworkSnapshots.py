@@ -19,6 +19,7 @@ NODE_COLORS = {
 
 
 def parse_times(value: str) -> list[float]:
+    """Parse selected continuous snapshot times from a comma-separated string."""
     times = sorted({float(x) for x in value.split(",") if x.strip()})
     if any(t < 0 for t in times):
         raise ValueError("snapshot times must be non-negative")
@@ -26,10 +27,12 @@ def parse_times(value: str) -> list[float]:
 
 
 def default_snapshot_times(args) -> list[float]:
+    """Use start, burn-in, and final time when no explicit times are provided."""
     return sorted({0.0, float(args.burn_in_time), float(args.t_max)})
 
 
 def community_layout(snapshot: dict, seed: int | None, iterations: int):
+    """Place communities in fixed macro-positions with local spring layouts."""
     import networkx as nx
 
     state = snapshot["state"]
@@ -42,6 +45,8 @@ def community_layout(snapshot: dict, seed: int | None, iterations: int):
     }[K]
     pos = {}
     for c in range(K):
+        # Layout each community internally, then translate it to its community
+        # center so the snapshot clearly shows between-community bridges.
         nodes = np.where(community_id == c)[0].tolist()
         local = nx.Graph()
         local.add_nodes_from(nodes)
@@ -59,6 +64,7 @@ def community_layout(snapshot: dict, seed: int | None, iterations: int):
 
 def draw_snapshot(snapshot: dict, out_path: str, layout_seed: int | None,
                   layout_iterations: int):
+    """Render one saved simulation state as a network PNG."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -85,6 +91,7 @@ def draw_snapshot(snapshot: dict, out_path: str, layout_seed: int | None,
 
     fig, ax = plt.subplots(figsize=(9, 7))
     ax.set_axis_off()
+    # Draw local structure first and inter-community bridges on top.
     nx.draw_networkx_edges(G, pos, edgelist=local_edges, ax=ax, edge_color="#9e9e9e",
                            width=0.9, alpha=0.75)
     nx.draw_networkx_edges(G, pos, edgelist=inter_edges, ax=ax, edge_color="#525252",
@@ -100,6 +107,8 @@ def draw_snapshot(snapshot: dict, out_path: str, layout_seed: int | None,
     node_colors = []
     node_sizes = []
     for s, v in zip(state.tolist(), virulence.tolist()):
+        # Infected hosts use a continuous virulence colormap; other states use
+        # categorical colors so the disease state remains easy to read.
         if s == community_sirs.STATE_I:
             node_colors.append(cmap(norm(v)))
             node_sizes.append(48)
@@ -143,6 +152,7 @@ def draw_snapshot(snapshot: dict, out_path: str, layout_seed: int | None,
 
 
 def snapshot_metadata(snapshot: dict, filename: str) -> dict:
+    """Create the metadata row that accompanies one snapshot PNG."""
     summary = community_sirs.summarize_state(
         snapshot["t"], snapshot["state"], snapshot["virulence"],
         snapshot["active_adj"], snapshot["community_id"])
@@ -164,6 +174,7 @@ def snapshot_metadata(snapshot: dict, filename: str) -> dict:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
+    """Reuse the model CLI and add snapshot-specific options."""
     p = community_sirs.build_arg_parser("CommunitySIRSNetworkSnapshots")
     p.set_defaults(out="community_sirs_snapshot_summary.csv", realizations=1)
     p.add_argument("--out-dir", default="community_sirs_snapshots")
@@ -176,6 +187,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main():
+    """Run one realization, render selected snapshots, and write metadata."""
     args = build_arg_parser().parse_args()
     community_sirs.validate_args(args)
     snapshot_times = default_snapshot_times(args) if args.snapshot_times is None else parse_times(args.snapshot_times)
