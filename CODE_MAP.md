@@ -191,6 +191,13 @@ Output:
 - CSV, default `community_sirs_summary.csv`
 - One row per realization with burn-in steady-state summaries and final state
   metrics.
+- Optional sampled trajectory CSV via `--samples-out`.
+
+Figure tools:
+
+- `PlotCommunitySIRS.py`: four-panel PNG plot from a sampled trajectory CSV.
+- `CommunitySIRSNetworkSnapshots.py`: selected-time community network PNGs plus
+  `snapshot_metadata.csv`.
 
 ## Standalone Experiments
 

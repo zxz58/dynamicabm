@@ -12,6 +12,7 @@ disease mortality, behavioral edge removal, and inter-community movement.
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import math
 import sys
@@ -77,6 +78,27 @@ SUMMARY_FIELDS = [
     "realized_clustering",
 ]
 
+SAMPLE_FIELDS = [
+    "realization",
+    "seed",
+    "t",
+    "S",
+    "I",
+    "R",
+    "D",
+    "prevalence",
+    "s_frac",
+    "r_frac",
+    "d_frac",
+    "mean_infected_virulence",
+    "virulence_variance",
+    "active_edges",
+    "inter_edges",
+    "realized_clustering",
+    "cumulative_deaths",
+    "extinct",
+]
+
 
 def _edge(u: int, v: int) -> tuple[int, int]:
     return (u, v) if u < v else (v, u)
@@ -97,7 +119,14 @@ def split_communities(N: int, K: int) -> tuple[np.ndarray, list[np.ndarray]]:
 
 def build_community_graph(N: int, K: int, kbar: int, rewiring_prob: float,
                           seed: int | None):
-    """Build disjoint Watts-Strogatz communities and adjacency sets."""
+    """
+    Build disjoint Watts-Strogatz communities and adjacency sets.
+    N: total number of nodes
+    K: number of communities
+    kbar: target local degree inside each community. 
+        Higher kbar means denser local communities. Lower kbar means sparser communities.
+    rewiring_prob: This controls how locally clustered vs random the within-community graph is.
+    """
     community_id, communities = split_communities(N, K)
     # active_adj is the mutable contact network used by Gillespie events;
     # baseline_adj records the initial local social structure for diagnostics
@@ -265,6 +294,10 @@ def summarize_state(t: float, state: np.ndarray, virulence: np.ndarray,
         var_v = math.nan
     return {
         "t": t,
+        "S": s_count,
+        "I": i_count,
+        "R": r_count,
+        "D": d_count,
         "prevalence": i_count / N,
         "s_frac": s_count / N,
         "r_frac": r_count / N,
@@ -331,7 +364,34 @@ def collect_events(state: np.ndarray, virulence: np.ndarray, active_adj: list[se
     return events, total_rate
 
 
-def run_one_realization(args, realization: int, rng: np.random.Generator) -> dict[str, float | int]:
+def snapshot_state(t: float, state: np.ndarray, virulence: np.ndarray,
+                   active_adj: list[set[int]], community_id: np.ndarray,
+                   cumulative_deaths: int) -> dict:
+    return {
+        "t": t,
+        "state": state.copy(),
+        "virulence": virulence.copy(),
+        "active_adj": copy.deepcopy(active_adj),
+        "community_id": community_id.copy(),
+        "cumulative_deaths": cumulative_deaths,
+    }
+
+
+def add_sample_context(sample: dict[str, float], realization: int,
+                       seed_value: int | str, cumulative_deaths: int) -> dict:
+    row = {
+        "realization": realization,
+        "seed": seed_value,
+        **sample,
+        "cumulative_deaths": cumulative_deaths,
+        "extinct": int(sample["I"] == 0),
+    }
+    return {field: row.get(field, "") for field in SAMPLE_FIELDS}
+
+
+def run_one_realization(args, realization: int, rng: np.random.Generator,
+                        return_samples: bool = False,
+                        snapshot_times: list[float] | None = None):
     params = TradeoffParams(
         v_min=args.v_min, v_max=args.v_max,
         beta_min=args.beta_min, beta_max=args.beta_max,
@@ -365,17 +425,40 @@ def run_one_realization(args, realization: int, rng: np.random.Generator) -> dic
     extinct = 0
     next_sample = args.burn_in_time
     samples: list[dict[str, float]] = []
+    sample_rows: list[dict] = []
+    snapshots: list[dict] = []
+    seed_value = "" if args.seed is None else args.seed + realization
+    requested_snapshots = sorted(snapshot_times or [])
+    next_snapshot = 0
+
+    def capture_samples_until(limit: float):
+        nonlocal next_sample
+        while next_sample <= limit:
+            sample = summarize_state(next_sample, state, virulence, active_adj, community_id)
+            samples.append(sample)
+            if return_samples:
+                sample_rows.append(add_sample_context(
+                    sample, realization, seed_value, cumulative_deaths))
+            next_sample += args.sample_interval
+
+    def capture_snapshots_until(limit: float):
+        nonlocal next_snapshot
+        while next_snapshot < len(requested_snapshots) and requested_snapshots[next_snapshot] <= limit:
+            snapshots.append(snapshot_state(
+                requested_snapshots[next_snapshot], state, virulence,
+                active_adj, community_id, cumulative_deaths))
+            next_snapshot += 1
 
     while t < args.t_max:
         events, total_rate = collect_events(state, virulence, active_adj, params, args.rho)
         if total_rate <= 0.0:
             break
         t_next = t + float(rng.exponential(1.0 / total_rate))
+        event_limit = min(t_next, args.t_max)
 
         # Samples summarize the state just before the next event, after burn-in.
-        while next_sample <= min(t_next, args.t_max):
-            samples.append(summarize_state(next_sample, state, virulence, active_adj, community_id))
-            next_sample += args.sample_interval
+        capture_samples_until(event_limit)
+        capture_snapshots_until(event_limit)
 
         if t_next > args.t_max:
             t = args.t_max
@@ -419,9 +502,8 @@ def run_one_realization(args, realization: int, rng: np.random.Generator) -> dic
             (i,) = payload
             add_intercommunity_edge(i, state, community_id, communities, active_adj, rng)
 
-    while next_sample <= args.t_max:
-        samples.append(summarize_state(next_sample, state, virulence, active_adj, community_id))
-        next_sample += args.sample_interval
+    capture_samples_until(args.t_max)
+    capture_snapshots_until(args.t_max)
 
     final = summarize_state(t, state, virulence, active_adj, community_id)
     if not np.any(state == STATE_I):
@@ -435,8 +517,7 @@ def run_one_realization(args, realization: int, rng: np.random.Generator) -> dic
             return math.nan
         return float(np.nanmean(vals))
 
-    seed_value = "" if args.seed is None else args.seed + realization
-    return {
+    summary = {
         "realization": realization,
         "seed": seed_value,
         "N": args.N,
@@ -463,14 +544,24 @@ def run_one_realization(args, realization: int, rng: np.random.Generator) -> dic
         "final_inter_edges": final["inter_edges"],
         "realized_clustering": final["realized_clustering"],
     }
+    if return_samples or snapshot_times is not None:
+        return summary, sample_rows, snapshots
+    return summary
 
 
 def run_sweep(args):
     rng = np.random.default_rng(args.seed)
     rows = []
+    all_samples = []
     t_start = _time.time()
     for realization in range(args.realizations):
-        row = run_one_realization(args, realization, rng)
+        result = run_one_realization(args, realization, rng,
+                                     return_samples=bool(args.samples_out))
+        if args.samples_out:
+            row, sample_rows, _snapshots = result
+            all_samples.extend(sample_rows)
+        else:
+            row = result
         rows.append(row)
         if not args.quiet:
             elapsed = _time.time() - t_start
@@ -478,19 +569,21 @@ def run_sweep(args):
                   f"prevalence={row['final_prevalence']:.3f} "
                   f"deaths={row['cumulative_deaths']} "
                   f"elapsed={elapsed:.1f}s", file=sys.stderr)
-    return rows
+    return rows, all_samples
 
 
 def build_arg_parser(prog: str = "CommunitySIRS") -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog=prog, description=__doc__)
     p.add_argument("--out", default="community_sirs_summary.csv",
                    help="output CSV path")
-    p.add_argument("--N", type=int, default=300, help="population size")
+    p.add_argument("--samples-out", default=None,
+                   help="optional per-sample CSV path for plotting steady-state trajectories")
+    p.add_argument("--N", type=int, default=100, help="population size")
     p.add_argument("--K", type=int, choices=[2, 3], default=3,
                    help="number of communities; only 2 or 3 are supported")
     p.add_argument("--kbar", type=int, default=8,
                    help="Watts-Strogatz local mean degree target")
-    p.add_argument("--rewiring-prob", type=float, default=0.1,
+    p.add_argument("--rewiring-prob", type=float, default=0.01,
                    help="Watts-Strogatz rewiring probability")
     p.add_argument("--t-max", type=float, default=500.0)
     p.add_argument("--burn-in-time", type=float, default=100.0)
@@ -557,12 +650,18 @@ def main(prog: str = "CommunitySIRS"):
     parser = build_arg_parser(prog)
     args = parser.parse_args()
     validate_args(args)
-    rows = run_sweep(args)
+    summary_rows, sample_rows = run_sweep(args)
     out_path = Path(args.out)
     with out_path.open("w", newline="") as fp:
         writer = csv.DictWriter(fp, fieldnames=SUMMARY_FIELDS)
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(summary_rows)
+    if args.samples_out:
+        samples_path = Path(args.samples_out)
+        with samples_path.open("w", newline="") as fp:
+            writer = csv.DictWriter(fp, fieldnames=SAMPLE_FIELDS)
+            writer.writeheader()
+            writer.writerows(sample_rows)
 
 
 if __name__ == "__main__":
