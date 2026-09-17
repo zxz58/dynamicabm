@@ -6,7 +6,7 @@ The active community-model code lives at the repo root:
 
 - `community_sirs.py` implements the continuous-time Gillespie SIRS ABM.
 - `CommunitySIRS.py` is the thin simulation CLI wrapper.
-- `PlotCommunitySIRS.py` creates the steady-state trajectory figure.
+- `PlotCommunitySIRS.py` creates the six-panel steady-state diagnostic figure.
 - `CommunitySIRSNetworkSnapshots.py` creates selected-time network snapshots.
 
 The old paper-port code has been moved into `paper_code/`. Treat that folder
@@ -18,8 +18,8 @@ paper reproduction scripts.
 The model uses 2 or 3 Watts-Strogatz communities. Hosts are in states
 `S=0`, `I=1`, `R=2`, or `D=3`. Events are selected with Gillespie dynamics:
 transmission, recovery, waning immunity, disease mortality, behavioral edge
-removal, and inter-community movement. Virulence is inherited at transmission
-with Gaussian mutation clipped to `[v_min, v_max]`.
+removal, inter-community movement, and inter-community edge decay. Virulence
+is inherited at transmission with Gaussian mutation clipped to `[v_min, v_max]`.
 
 Virulence controls:
 
@@ -31,6 +31,19 @@ Virulence controls:
 
 Each trade-off supports `linear`, `concave`, and `convex` shape options.
 
+Inter-community edges should be treated as temporary contacts. Movement events
+create them; `--inter-edge-decay-rate` removes each active inter-community
+edge with an exponential lifetime. A rough tuning heuristic is:
+
+```text
+expected inter-community edges ~= creation rate / inter-edge decay rate
+```
+
+The realized count also depends on duplicate movement attempts, deaths,
+behavioral removals, and infection dynamics. To target 20-30 inter-community
+edges at steady state, first tune `--inter-edge-decay-rate` against the chosen
+`--phi-max`.
+
 ## Figure Workflow
 
 Use sampled trajectory output for steady-state figures:
@@ -38,6 +51,19 @@ Use sampled trajectory output for steady-state figures:
 ```bash
 python3 CommunitySIRS.py --samples-out community_sirs_samples.csv --out community_sirs_summary.csv
 python3 PlotCommunitySIRS.py --samples community_sirs_samples.csv --out community_sirs_steady.png --burn-in-time 100
+```
+
+For comparing connectivity scenarios:
+
+```bash
+python3 CommunitySIRS.py --phi-max 0.01 --inter-edge-decay-rate 0.08 --samples-out samples_low.csv --out summary_low.csv
+python3 CommunitySIRS.py --phi-max 0.03 --inter-edge-decay-rate 0.08 --samples-out samples_high.csv --out summary_high.csv
+python3 PlotCommunitySIRS.py \
+  --samples low:samples_low.csv \
+  --samples high:samples_high.csv \
+  --connectivity-out virulence_vs_inter_edges.png \
+  --virulence-time-out virulence_by_connectivity.png \
+  --burn-in-time 100
 ```
 
 Use the snapshot script for selected network states:
@@ -64,6 +90,6 @@ python3 CommunitySIRSNetworkSnapshots.py --N 90 --K 3 --t-max 20 --burn-in-time 
 - Add a sensitivity runner that sweeps one or two parameters and writes
   plotting-friendly CSVs.
 - Add heatmap plotting for endemic prevalence, mean virulence, deaths, and
-  inter-community edges.
+  inter-community edges once parameter sweeps become routine.
 - Consider performance improvements if larger `N`, longer `t-max`, or larger
   parameter sweeps become routine.

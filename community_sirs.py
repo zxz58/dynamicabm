@@ -79,6 +79,7 @@ SUMMARY_FIELDS = [
     "K",
     "t_final",
     "samples",
+    "inter_edge_decay_rate",
     "extinct",
     "mean_prevalence",
     "final_prevalence",
@@ -107,6 +108,7 @@ SAMPLE_FIELDS = [
     "realization",
     "seed",
     "t",
+    "inter_edge_decay_rate",
     "S",
     "I",
     "R",
@@ -344,6 +346,13 @@ def add_intercommunity_edge(i: int, state: np.ndarray, community_id: np.ndarray,
     return False
 
 
+def remove_edge(edge: tuple[int, int], active_adj: list[set[int]]):
+    """Remove an undirected active edge if it is still present."""
+    u, v = edge
+    active_adj[u].discard(v)
+    active_adj[v].discard(u)
+
+
 def count_inter_edges(active_adj: list[set[int]], community_id: np.ndarray) -> int:
     """Count currently active edges whose endpoints are in different communities."""
     return sum(1 for u, v in active_edges(active_adj) if community_id[u] != community_id[v])
@@ -402,7 +411,8 @@ def choose_weighted_event(events: list[tuple[str, tuple, float]],
 
 
 def collect_events(state: np.ndarray, virulence: np.ndarray, active_adj: list[set[int]],
-                   params: TradeoffParams, rho: float):
+                   community_id: np.ndarray, params: TradeoffParams, rho: float,
+                   inter_edge_decay_rate: float):
     """Enumerate every event currently available to the Gillespie sampler.
 
     The returned event list is explicit rather than optimized: each tuple is
@@ -415,6 +425,7 @@ def collect_events(state: np.ndarray, virulence: np.ndarray, active_adj: list[se
     # Edge-local events: transmission along S-I contacts and behavioral
     # removal of contacts incident to infectious hosts.
     for u, v in active_edges(active_adj):
+        is_inter_edge = community_id[u] != community_id[v]
         su = state[u]
         sv = state[v]
         if su == STATE_S and sv == STATE_I:
@@ -426,6 +437,11 @@ def collect_events(state: np.ndarray, virulence: np.ndarray, active_adj: list[se
             events.append(("edge_removal", (u, v, u), float(delta_of(virulence[u], params))))
         if sv == STATE_I:
             events.append(("edge_removal", (u, v, v), float(delta_of(virulence[v], params))))
+        # Long-range contacts represent temporary movement/mixing, so they
+        # decay independently of disease state. Local Watts-Strogatz edges do
+        # not use this event; they are the stable within-community backbone.
+        if is_inter_edge:
+            events.append(("inter_edge_decay", (u, v), float(inter_edge_decay_rate)))
 
     # Node-local disease events depend on the infected host's virulence.
     infected_idx = np.where(state == STATE_I)[0]
@@ -475,7 +491,8 @@ def snapshot_state(t: float, state: np.ndarray, virulence: np.ndarray,
 
 
 def add_sample_context(sample: dict[str, float], realization: int,
-                       seed_value: int | str, cumulative_deaths: int) -> dict:
+                       seed_value: int | str, cumulative_deaths: int,
+                       inter_edge_decay_rate: float) -> dict:
     """Attach run metadata to one sampled state row.
 
     The plotting script expects each row to be self-contained: it should know
@@ -486,6 +503,7 @@ def add_sample_context(sample: dict[str, float], realization: int,
         "realization": realization,
         "seed": seed_value,
         **sample,
+        "inter_edge_decay_rate": inter_edge_decay_rate,
         "cumulative_deaths": cumulative_deaths,
         "extinct": int(sample["I"] == 0),
     }
@@ -550,7 +568,8 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
             samples.append(sample)
             if return_samples:
                 sample_rows.append(add_sample_context(
-                    sample, realization, seed_value, cumulative_deaths))
+                    sample, realization, seed_value, cumulative_deaths,
+                    args.inter_edge_decay_rate))
             next_sample += args.sample_interval
 
     def capture_snapshots_until(limit: float):
@@ -564,7 +583,9 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
 
     while t < args.t_max:
         # Gillespie step 1: compute the total event rate in the current state.
-        events, total_rate = collect_events(state, virulence, active_adj, params, args.rho)
+        events, total_rate = collect_events(
+            state, virulence, active_adj, community_id, params, args.rho,
+            args.inter_edge_decay_rate)
         if total_rate <= 0.0:
             break
         # Gillespie step 2: draw the waiting time until the next event.
@@ -615,8 +636,7 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
         elif kind == "edge_removal":
             u, v, owner = payload
             if v in active_adj[u] and state[owner] == STATE_I:
-                active_adj[u].discard(v)
-                active_adj[v].discard(u)
+                remove_edge((u, v), active_adj)
                 # Record the owner of the behavioral severing so only that
                 # host's recovery restores this contact.
                 severed_edges[owner].add(_edge(u, v))
@@ -625,6 +645,13 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
             # Failed movement attempts are allowed; they simply mean no new
             # valid cross-community contact was available for this draw.
             add_intercommunity_edge(i, state, community_id, communities, active_adj, rng)
+        elif kind == "inter_edge_decay":
+            # Temporary inter-community contacts age out through this event.
+            # The event is still checked because another process may have
+            # removed the edge after the event list was built.
+            u, v = payload
+            if community_id[u] != community_id[v] and v in active_adj[u]:
+                remove_edge((u, v), active_adj)
 
     # If the process ended early because no positive-rate events remain, still
     # fill requested sample/snapshot times with the final frozen state.
@@ -651,6 +678,7 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
         "K": args.K,
         "t_final": t,
         "samples": len(samples),
+        "inter_edge_decay_rate": args.inter_edge_decay_rate,
         "extinct": extinct,
         "mean_prevalence": sample_mean("prevalence"),
         "final_prevalence": final["prevalence"],
@@ -737,6 +765,10 @@ def build_arg_parser(prog: str = "CommunitySIRS") -> argparse.ArgumentParser:
     p.add_argument("--delta-min", type=float, default=0.0)
     p.add_argument("--delta-max", type=float, default=0.03)
     p.add_argument("--phi-max", type=float, default=0.02)
+    p.add_argument("--inter-edge-decay-rate", type=float, default=0.08,
+                   help="Gillespie removal rate per active inter-community edge. "
+                        "Larger values shorten long-range edge lifetimes; tune "
+                        "against --phi-max to target about 20-30 inter-community edges.")
     p.add_argument("--rho", type=float, default=0.01,
                    help="waning immunity rate")
 
@@ -772,8 +804,9 @@ def validate_args(args):
         hi = getattr(args, f"{name}_max")
         if lo < 0 or hi < 0 or hi < lo:
             raise SystemExit(f"--{name}-min/--{name}-max must be nonnegative and ordered")
-    if args.phi_max < 0 or args.rho < 0 or args.sigma_m < 0:
-        raise SystemExit("--phi-max, --rho, and --sigma-m must be nonnegative")
+    if (args.phi_max < 0 or args.inter_edge_decay_rate < 0
+            or args.rho < 0 or args.sigma_m < 0):
+        raise SystemExit("--phi-max, --inter-edge-decay-rate, --rho, and --sigma-m must be nonnegative")
 
 
 def main(prog: str = "CommunitySIRS"):
