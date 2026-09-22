@@ -6,7 +6,8 @@ The active community-model code lives at the repo root:
 
 - `community_sirs.py` implements the continuous-time Gillespie SIRS ABM.
 - `CommunitySIRS.py` is the thin simulation CLI wrapper.
-- `PlotCommunitySIRS.py` creates the six-panel steady-state diagnostic figure.
+- `PlotCommunitySIRS.py` creates single-scenario four-panel diagnostics.
+- `CompareCommunitySIRS.py` creates the multi-scenario 1x2 comparison figure.
 - `CommunitySIRSNetworkSnapshots.py` creates selected-time network snapshots.
 
 The old paper-port code has been moved into `paper_code/`. Treat that folder
@@ -53,18 +54,28 @@ python3 CommunitySIRS.py --samples-out community_sirs_samples.csv --out communit
 python3 PlotCommunitySIRS.py --samples community_sirs_samples.csv --out community_sirs_steady.png --burn-in-time 100
 ```
 
-For comparing connectivity scenarios:
+`PlotCommunitySIRS.py` is the single-scenario diagnostic plotter. Its four
+panels are prevalence/I fraction, mean infected virulence, active and
+inter-community edges, and S/I/R/D state composition.
+
+For comparing connectivity scenarios, generate separate sample files and pass
+them to `CompareCommunitySIRS.py` with `LABEL:PATH` inputs. The comparison
+figure colors points and lines by sample-file label:
 
 ```bash
-python3 CommunitySIRS.py --phi-max 0.01 --inter-edge-decay-rate 0.08 --samples-out samples_low.csv --out summary_low.csv
-python3 CommunitySIRS.py --phi-max 0.03 --inter-edge-decay-rate 0.08 --samples-out samples_high.csv --out summary_high.csv
-python3 PlotCommunitySIRS.py \
-  --samples low:samples_low.csv \
-  --samples high:samples_high.csv \
-  --connectivity-out virulence_vs_inter_edges.png \
-  --virulence-time-out virulence_by_connectivity.png \
+python3 CommunitySIRS.py --phi-max 0.01 --inter-edge-decay-rate 0.08 --samples-out samples_low_phi.csv --out summary_low_phi.csv
+python3 CommunitySIRS.py --phi-max 0.03 --inter-edge-decay-rate 0.08 --samples-out samples_high_phi.csv --out summary_high_phi.csv
+python3 CompareCommunitySIRS.py \
+  --samples low_phi:samples_low_phi.csv \
+  --samples high_phi:samples_high_phi.csv \
+  --out community_sirs_comparison.png \
   --burn-in-time 100
 ```
+
+The left comparison panel uses realized cross-community transmission events,
+not the raw number of inter-community edges. It counts infections where the
+source and newly infected host are in different communities. The right panel
+compares mean infected virulence over time across the supplied scenarios.
 
 Use the snapshot script for selected network states:
 
@@ -79,9 +90,10 @@ differently; infected nodes use a virulence colormap.
 ## Checks To Run
 
 ```bash
-python3 -m py_compile community_sirs.py CommunitySIRS.py PlotCommunitySIRS.py CommunitySIRSNetworkSnapshots.py
+python3 -m py_compile community_sirs.py CommunitySIRS.py PlotCommunitySIRS.py CompareCommunitySIRS.py CommunitySIRSNetworkSnapshots.py
 python3 CommunitySIRS.py --N 90 --K 3 --t-max 20 --burn-in-time 5 --sample-interval 1 --realizations 2 --seed 1 --samples-out /tmp/community_samples.csv --out /tmp/community_summary.csv --quiet
 python3 PlotCommunitySIRS.py --samples /tmp/community_samples.csv --out /tmp/community_steady.png --burn-in-time 5
+python3 CompareCommunitySIRS.py --samples base:/tmp/community_samples.csv --out /tmp/community_comparison.png --burn-in-time 5
 python3 CommunitySIRSNetworkSnapshots.py --N 90 --K 3 --t-max 20 --burn-in-time 5 --snapshot-times 0,5,20 --seed 1 --out-dir /tmp/community_snapshots --quiet
 ```
 

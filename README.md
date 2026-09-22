@@ -9,8 +9,10 @@ the new community model and its figure workflow.
 
 - `CommunitySIRS.py`: thin command-line entry point.
 - `community_sirs.py`: core Gillespie SIRS engine.
-- `PlotCommunitySIRS.py`: six-panel steady-state diagnostic plotting from
+- `PlotCommunitySIRS.py`: single-scenario four-panel diagnostic plotting from
   sampled model output.
+- `CompareCommunitySIRS.py`: multi-scenario 1x2 comparison figure from
+  multiple sampled model outputs.
 - `CommunitySIRSNetworkSnapshots.py`: selected-time community network snapshot
   PNGs plus metadata.
 
@@ -48,7 +50,8 @@ python3 CommunitySIRS.py \
   --samples-out community_sirs_samples.csv
 ```
 
-Plot the sampled steady-state diagnostics:
+Plot the sampled steady-state diagnostics. The fourth panel shows all
+state-composition fractions together: S/I/R/D.
 
 ```bash
 python3 PlotCommunitySIRS.py \
@@ -58,21 +61,55 @@ python3 PlotCommunitySIRS.py \
 ```
 
 Compare virulence across inter-community-connectivity scenarios by generating
-multiple sample files and passing `LABEL:PATH` inputs. The main `--out`
-figures are six-panel diagnostics, including the connectivity and virulence
-time comparison panels:
+multiple sample files and passing `LABEL:PATH` inputs to
+`CompareCommunitySIRS.py`. The comparison figure colors both points and lines
+by sample-file label. The left panel shows mean infected virulence versus mean
+cumulative cross-community transmissions, with one point per realization and a
+larger mean marker per scenario when multiple realizations are available. The
+right panel shows mean infected virulence over time for each scenario:
 
 ```bash
-python3 CommunitySIRS.py --phi-max 0.01 --inter-edge-decay-rate 0.08 \
-  --samples-out samples_low.csv --out summary_low.csv
-python3 CommunitySIRS.py --phi-max 0.03 --inter-edge-decay-rate 0.08 \
-  --samples-out samples_high.csv --out summary_high.csv
+python3 CommunitySIRS.py \
+  --phi-max 0.01 --inter-edge-decay-rate 0.08 \
+  --samples-out samples_low_phi.csv \
+  --out summary_low_phi.csv
+python3 CommunitySIRS.py \
+  --phi-max 0.03 --inter-edge-decay-rate 0.08 \
+  --samples-out samples_high_phi.csv \
+  --out summary_high_phi.csv
+python3 CompareCommunitySIRS.py \
+  --samples low_phi:samples_low_phi.csv \
+  --samples high_phi:samples_high_phi.csv \
+  --out community_sirs_comparison.png \
+  --burn-in-time 100
+```
+
+You can compare edge-lifetime scenarios the same way:
+
+```bash
+python3 CommunitySIRS.py \
+  --phi-max 0.02 --inter-edge-decay-rate 0.04 \
+  --samples-out samples_slow_decay.csv \
+  --out summary_slow_decay.csv
+python3 CommunitySIRS.py \
+  --phi-max 0.02 --inter-edge-decay-rate 0.12 \
+  --samples-out samples_fast_decay.csv \
+  --out summary_fast_decay.csv
+python3 CompareCommunitySIRS.py \
+  --samples slow_decay:samples_slow_decay.csv \
+  --samples fast_decay:samples_fast_decay.csv \
+  --out decay_comparison.png \
+  --burn-in-time 100
+```
+
+If multiple `--samples` inputs are passed to `PlotCommunitySIRS.py`, it still
+creates one separate four-panel diagnostic figure per file using label suffixes:
+
+```bash
 python3 PlotCommunitySIRS.py \
-  --samples low:samples_low.csv \
-  --samples high:samples_high.csv \
+  --samples low_phi:samples_low_phi.csv \
+  --samples high_phi:samples_high_phi.csv \
   --out community_sirs_steady.png \
-  --connectivity-out virulence_vs_inter_edges.png \
-  --virulence-time-out virulence_by_connectivity.png \
   --burn-in-time 100
 ```
 
@@ -91,8 +128,9 @@ python3 CommunitySIRSNetworkSnapshots.py \
 
 `CommunitySIRS.py` writes one summary row per realization. Important columns
 include prevalence, S/R/D fractions, mean infected virulence, virulence
-variance, cumulative deaths, active edges, inter-community edges, realized
-clustering, `inter_edge_decay_rate`, and extinction status.
+variance, cumulative deaths, cumulative cross-community transmissions, active
+edges, inter-community edges, realized clustering, `inter_edge_decay_rate`, and
+extinction status.
 
 When `--samples-out` is provided, the model also writes one row per sampled
 time point. Use this file for trajectory plots and later sensitivity-analysis

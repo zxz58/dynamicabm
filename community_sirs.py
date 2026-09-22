@@ -94,6 +94,8 @@ SUMMARY_FIELDS = [
     "mean_virulence_variance",
     "final_virulence_variance",
     "cumulative_deaths",
+    "mean_intercommunity_transmissions",
+    "final_intercommunity_transmissions",
     "mean_active_edges",
     "final_active_edges",
     "mean_inter_edges",
@@ -123,6 +125,7 @@ SAMPLE_FIELDS = [
     "inter_edges",
     "realized_clustering",
     "cumulative_deaths",
+    "cumulative_intercommunity_transmissions",
     "extinct",
 ]
 
@@ -492,12 +495,14 @@ def snapshot_state(t: float, state: np.ndarray, virulence: np.ndarray,
 
 def add_sample_context(sample: dict[str, float], realization: int,
                        seed_value: int | str, cumulative_deaths: int,
+                       cumulative_intercommunity_transmissions: int,
                        inter_edge_decay_rate: float) -> dict:
     """Attach run metadata to one sampled state row.
 
     The plotting script expects each row to be self-contained: it should know
     which realization it came from, what seed generated that realization, and
-    how many deaths had accumulated by that sample time.
+    how many deaths and cross-community infections had accumulated by that
+    sample time.
     """
     row = {
         "realization": realization,
@@ -505,6 +510,7 @@ def add_sample_context(sample: dict[str, float], realization: int,
         **sample,
         "inter_edge_decay_rate": inter_edge_decay_rate,
         "cumulative_deaths": cumulative_deaths,
+        "cumulative_intercommunity_transmissions": cumulative_intercommunity_transmissions,
         "extinct": int(sample["I"] == 0),
     }
     return {field: row.get(field, "") for field in SAMPLE_FIELDS}
@@ -530,7 +536,7 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
         gamma_shape=args.gamma_shape, delta_shape=args.delta_shape,
         phi_shape=args.phi_shape,
     )
-    graph_seed = None if args.seed is None else args.seed + realization * 1009
+    graph_seed = None if args.seed is None else args.seed + realization * 1009 # so every realization start with different network
     community_id, communities, active_adj, _baseline_adj = build_community_graph(
         args.N, args.K, args.kbar, args.rewiring_prob, graph_seed)
 
@@ -551,6 +557,7 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
 
     t = 0.0
     cumulative_deaths = 0
+    cumulative_intercommunity_transmissions = 0
     extinct = 0
     next_sample = args.burn_in_time
     samples: list[dict[str, float]] = []
@@ -562,15 +569,20 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
 
     def capture_samples_until(limit: float):
         """Record regularly spaced samples up to a continuous-time limit."""
-        nonlocal next_sample
+        nonlocal next_sample # outside defined variable used inside function
         while next_sample <= limit:
             sample = summarize_state(next_sample, state, virulence, active_adj, community_id)
+            # Store cumulative event counters inside the internal sample list
+            # too, so summary means can use the same post-burn-in samples that
+            # the plotting CSV receives.
+            sample["cumulative_intercommunity_transmissions"] = cumulative_intercommunity_transmissions
             samples.append(sample)
             if return_samples:
                 sample_rows.append(add_sample_context(
                     sample, realization, seed_value, cumulative_deaths,
+                    cumulative_intercommunity_transmissions,
                     args.inter_edge_decay_rate))
-            next_sample += args.sample_interval
+            next_sample += args.sample_interval # samples are saved with fixed intervals
 
     def capture_snapshots_until(limit: float):
         """Freeze graph/host state for all requested snapshots reached so far."""
@@ -589,7 +601,7 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
         if total_rate <= 0.0:
             break
         # Gillespie step 2: draw the waiting time until the next event.
-        t_next = t + float(rng.exponential(1.0 / total_rate))
+        t_next = t + float(rng.exponential(1.0 / total_rate)) #stochastic event time
         event_limit = min(t_next, args.t_max)
 
         # Samples summarize the state just before the next event, after burn-in.
@@ -610,6 +622,13 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
                 # strain determines offspring virulence.
                 state[susceptible] = STATE_I
                 infection_count[susceptible] += 1
+                # This is the realized connectivity-dependent event of
+                # interest: an infection that actually crosses community
+                # membership through an active edge. It differs from the raw
+                # count of inter-community edges, which measures opportunity
+                # rather than transmission.
+                if community_id[susceptible] != community_id[source]:
+                    cumulative_intercommunity_transmissions += 1
                 # Virulence is inherited from the source strain with mutation.
                 child_v = virulence[source] + rng.normal(0.0, args.sigma_m)
                 virulence[susceptible] = float(np.clip(child_v, args.v_min, args.v_max))
@@ -693,6 +712,8 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
         "mean_virulence_variance": sample_mean("virulence_variance"),
         "final_virulence_variance": final["virulence_variance"],
         "cumulative_deaths": cumulative_deaths,
+        "mean_intercommunity_transmissions": sample_mean("cumulative_intercommunity_transmissions"),
+        "final_intercommunity_transmissions": cumulative_intercommunity_transmissions,
         "mean_active_edges": sample_mean("active_edges"),
         "final_active_edges": final["active_edges"],
         "mean_inter_edges": sample_mean("inter_edges"),
@@ -731,9 +752,9 @@ def run_sweep(args):
 def build_arg_parser(prog: str = "CommunitySIRS") -> argparse.ArgumentParser:
     """Define the public CLI shared by simulation and snapshot scripts."""
     p = argparse.ArgumentParser(prog=prog, description=__doc__)
-    p.add_argument("--out", default="community_sirs_summary.csv",
+    p.add_argument("--out", default="results/summary.csv",
                    help="output CSV path")
-    p.add_argument("--samples-out", default=None,
+    p.add_argument("--samples-out", default= "results/samples.csv",
                    help="optional per-sample CSV path for plotting steady-state trajectories")
     p.add_argument("--N", type=int, default=100, help="population size")
     p.add_argument("--K", type=int, choices=[2, 3], default=3,
@@ -765,7 +786,7 @@ def build_arg_parser(prog: str = "CommunitySIRS") -> argparse.ArgumentParser:
     p.add_argument("--delta-min", type=float, default=0.0)
     p.add_argument("--delta-max", type=float, default=0.03)
     p.add_argument("--phi-max", type=float, default=0.02)
-    p.add_argument("--inter-edge-decay-rate", type=float, default=0.08,
+    p.add_argument("--inter-edge-decay-rate", type=float, default=0.02,
                    help="Gillespie removal rate per active inter-community edge. "
                         "Larger values shorten long-range edge lifetimes; tune "
                         "against --phi-max to target about 20-30 inter-community edges.")
