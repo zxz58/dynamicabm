@@ -150,10 +150,10 @@ def make_plot(label: str, by_realization: dict[int, list[dict[str, float]]],
 def build_arg_parser() -> argparse.ArgumentParser:
     """Define the plotting CLI."""
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--samples", default= ["results/samples.csv"], action="append",
-                   help="CommunitySIRS --samples-out CSV. Can be PATH or LABEL:PATH; repeat to make one plot per file.")
-    p.add_argument("--out", default= "results/steady.png", help="output PNG path for four-panel plot")
-    p.add_argument("--burn-in-time", type=float, default=100,
+    p.add_argument("--samples", action="append",
+                   help="CommunitySIRS --samples-out CSV. Defaults to results/samples.csv. Can be PATH or LABEL:PATH; repeat to make one plot per file.")
+    p.add_argument("--out", default="results/steady.png", help="output PNG path for four-panel plot")
+    p.add_argument("--burn-in-time", type=float, default=None,
                    help="optional burn-in marker time")
     return p
 
@@ -161,14 +161,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main():
     """Read sample CSVs and save requested figures."""
     args = build_arg_parser().parse_args()
-    sample_inputs = [parse_sample_arg(value) for value in args.samples]
+    samples = args.samples or ["results/samples.csv"]
+    sample_inputs = [parse_sample_arg(value) for value in samples]
     sample_sets = [(label, read_samples(path)) for label, path in sample_inputs]
 
     out_path = args.out
-    if out_path is None:
-        first_path = sample_inputs[0][1]
-        base, _ext = os.path.splitext(first_path)
-        out_path = base + ".png"
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
 
     if len(sample_inputs) == 1:

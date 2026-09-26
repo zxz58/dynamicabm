@@ -14,10 +14,13 @@ The main implementation idea is:
 1. Build an initial local contact graph inside each community.
 2. Keep a mutable active graph as sets of neighbors, because edges are added
    and removed during the simulation.
-3. At each Gillespie step, enumerate all currently possible events and their
+3. Death events count mortality but immediately replace the host slot with a
+   susceptible host, restoring its baseline local contacts and dropping any
+   transient inter-community contacts.
+4. At each Gillespie step, enumerate all currently possible events and their
    rates, draw the waiting time, then draw exactly one event proportional to
    its rate.
-4. Record regularly spaced samples after burn-in so endemic behavior can be
+5. Record regularly spaced samples after burn-in so endemic behavior can be
    summarized and plotted.
 """
 from __future__ import annotations
@@ -217,11 +220,11 @@ def active_edges(active_adj: list[set[int]]) -> set[tuple[int, int]]:
 
 
 def realized_clustering(active_adj: list[set[int]], alive_mask: np.ndarray) -> float:
-    """Compute clustering on the active network after removing dead hosts.
+    """Compute clustering on the active network after excluding dead hosts.
 
     Clustering is reported on the graph that disease processes can actually
-    use at that time. Dead hosts are excluded because mortality permanently
-    removes them and their incident edges from the contact network.
+    use at that time. In the replacement-at-death model, hosts usually leave
+    the D state immediately, so this mask is mostly a compatibility guard.
     """
     G = nx.Graph()
     alive_nodes = np.where(alive_mask)[0].tolist()
@@ -312,13 +315,36 @@ def restore_edges(i: int, state: np.ndarray, active_adj: list[set[int]],
     severed_edges[i].clear()
 
 
-def remove_all_edges(i: int, active_adj: list[set[int]],
-                     severed_edges: list[set[tuple[int, int]]]):
-    # Disease mortality is absorbing: dead hosts leave the active graph.
+def reset_after_mortality(i: int, state: np.ndarray, active_adj: list[set[int]],
+                          baseline_adj: list[set[int]],
+                          severed_edges: list[set[tuple[int, int]]]):
+    """Replace a dead host slot with a susceptible host and reset its contacts.
+
+    The Watts-Strogatz within-community graph is interpreted as stable local
+    social structure for the host slot, so those baseline contacts are restored
+    immediately. Inter-community edges are transient movement contacts, so they
+    are deliberately not restored; future movement events must rebuild them.
+    """
+    # Drop every currently active edge touching this host. This clears both
+    # local contacts that may be rebuilt below and transient inter-community
+    # contacts that should disappear with the death/replacement event.
     for j in list(active_adj[i]):
         active_adj[j].discard(i)
         active_adj[i].discard(j)
-    severed_edges[i].clear()
+
+    # Remove stale records of behaviorally severed edges involving this host.
+    # Otherwise another host's later recovery could restore a pre-replacement
+    # contact that should have been reset by mortality.
+    for edges in severed_edges:
+        edges.difference_update({edge for edge in edges if i in edge})
+
+    # The replacement is immediately susceptible. Restore only the permanent
+    # within-community baseline contacts for this host slot.
+    state[i] = STATE_S
+    for j in baseline_adj[i]:
+        if state[j] != STATE_D:
+            active_adj[i].add(j)
+            active_adj[j].add(i)
 
 
 def add_intercommunity_edge(i: int, state: np.ndarray, community_id: np.ndarray,
@@ -537,7 +563,7 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
         phi_shape=args.phi_shape,
     )
     graph_seed = None if args.seed is None else args.seed + realization * 1009 # so every realization start with different network
-    community_id, communities, active_adj, _baseline_adj = build_community_graph(
+    community_id, communities, active_adj, baseline_adj = build_community_graph(
         args.N, args.K, args.kbar, args.rewiring_prob, graph_seed)
 
     state = np.full(args.N, STATE_S, dtype=np.int8)
@@ -642,11 +668,14 @@ def run_one_realization(args, realization: int, rng: np.random.Generator,
         elif kind == "mortality":
             (i,) = payload
             if state[i] == STATE_I:
-                # Deaths are permanent in this version: no birth or replacement
-                # process replenishes the host population.
-                state[i] = STATE_D
+                # Deaths are counted, but the host slot is immediately
+                # replaced by a susceptible host so total population size stays
+                # fixed. Local baseline contacts return; transient
+                # inter-community contacts must be rebuilt by movement.
                 cumulative_deaths += 1
-                remove_all_edges(i, active_adj, severed_edges)
+                virulence[i] = args.v_init
+                infection_count[i] = 0
+                reset_after_mortality(i, state, active_adj, baseline_adj, severed_edges)
         elif kind == "waning":
             (i,) = payload
             if state[i] == STATE_R:

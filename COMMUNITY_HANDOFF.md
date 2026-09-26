@@ -16,11 +16,13 @@ paper reproduction scripts.
 
 ## Model Summary
 
-The model uses 2 or 3 Watts-Strogatz communities. Hosts are in states
-`S=0`, `I=1`, `R=2`, or `D=3`. Events are selected with Gillespie dynamics:
-transmission, recovery, waning immunity, disease mortality, behavioral edge
-removal, inter-community movement, and inter-community edge decay. Virulence
-is inherited at transmission with Gaussian mutation clipped to `[v_min, v_max]`.
+The model uses 2 or 3 Watts-Strogatz communities. Hosts are usually in states
+`S=0`, `I=1`, or `R=2`; `D=3` remains as a compatibility state, but mortality
+now immediately replaces the host slot with a susceptible host. Events are
+selected with Gillespie dynamics: transmission, recovery, waning immunity,
+disease mortality/replacement, behavioral edge removal, inter-community
+movement, and inter-community edge decay. Virulence is inherited at
+transmission with Gaussian mutation clipped to `[v_min, v_max]`.
 
 Virulence controls:
 
@@ -31,6 +33,12 @@ Virulence controls:
 - `phi(v)`: movement, decreasing.
 
 Each trade-off supports `linear`, `concave`, and `convex` shape options.
+
+Mortality events still increment `cumulative_deaths`, but they no longer shrink
+the active population. The replacement host keeps the permanent local
+Watts-Strogatz contacts for that node slot; transient inter-community contacts
+incident to the dead host are cleared and must be rebuilt by later movement
+events.
 
 Inter-community edges should be treated as temporary contacts. Movement events
 create them; `--inter-edge-decay-rate` removes each active inter-community

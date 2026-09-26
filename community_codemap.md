@@ -62,6 +62,7 @@ Important mutable simulation objects inside `run_one_realization`:
 - `virulence: np.ndarray[float64]`, shape `(N,)`
 - `infection_count: np.ndarray[int64]`, shape `(N,)`
 - `active_adj: list[set[int]]`, length `N`
+- `baseline_adj: list[set[int]]`, length `N`
 - `severed_edges: list[set[tuple[int, int]]]`, length `N`
 - `cumulative_deaths: int`
 - `cumulative_intercommunity_transmissions: int`
@@ -92,7 +93,7 @@ Important mutable simulation objects inside `run_one_realization`:
 | `collect_events` | Enumerates Gillespie events and rates | state, virulence, graph, params, rho, eta | reads current state/graph | `(events, total_rate)` | `run_one_realization` | `active_edges`, rate funcs |
 | `choose_weighted_event` | Samples one event by rate | events, total_rate, rng | RNG | `(kind, payload)` | `run_one_realization` | RNG |
 | `restore_edges` | Restores edges severed during infection | host id, state, graph, severed list | mutates graph, severed_edges | none | recovery branch | none |
-| `remove_all_edges` | Removes all edges of dead host | host id, graph, severed list | mutates graph, severed_edges | none | mortality branch | none |
+| `reset_after_mortality` | Counts replacement-style death contact reset | host id, state, graph, baseline graph, severed list | mutates state, graph, severed_edges | none | mortality branch | none |
 | `add_intercommunity_edge` | Adds temporary edge to another community | host, state, communities, graph, rng | mutates graph | `bool` | movement branch | RNG |
 | `remove_edge` | Removes undirected edge | edge, graph | mutates graph | none | edge removal / decay | none |
 | `count_inter_edges` | Counts active cross-community edges | graph, community_id | reads graph | `int` | `summarize_state` | `active_edges` |
@@ -137,7 +138,9 @@ The graph starts as only within-community Watts-Strogatz edges. Later:
 - `inter_edge_decay` removes cross-community edges.
 - `edge_removal` can remove any edge incident to an infected host.
 - `recovery` restores behaviorally severed edges owned by that recovered host.
-- `mortality` removes all active edges touching the dead host.
+- `mortality` counts the death, immediately returns the host slot to
+  susceptible, restores baseline local contacts, and clears transient incident
+  inter-community contacts.
 
 ## 5. Gillespie Loop Detail
 
@@ -158,7 +161,7 @@ flowchart TD
 
     I -- transmission --> T["S -> I; mutate virulence; increment intercommunity counter if communities differ"]
     I -- recovery --> R["I -> R; restore_edges"]
-    I -- mortality --> M["I -> D; cumulative_deaths++; remove_all_edges"]
+    I -- mortality --> M["I -> S replacement; cumulative_deaths++; reset_after_mortality"]
     I -- waning --> W["R -> S"]
     I -- edge_removal --> ER["remove_edge; store edge in severed_edges[owner]"]
     I -- movement --> MV["add_intercommunity_edge"]
@@ -264,7 +267,7 @@ cross-community transmissions. Those are counters maintained in
 | `community_id` | `np.ndarray`, shape `(N,)`, dtype `int64` | fixed community index per host |
 | `communities` | `list[np.ndarray]`, length `K` | node ids in each community |
 | `active_adj` | `list[set[int]]`, length `N` | mutable active contact network |
-| `baseline_adj` | `list[set[int]]`, length `N` | initial local graph; currently returned but unused in this file |
+| `baseline_adj` | `list[set[int]]`, length `N` | initial local graph restored for a host slot after mortality/replacement |
 | `severed_edges` | `list[set[tuple[int, int]]]`, length `N` | edges removed due to infected host behavior, restored on recovery |
 | `events` | `list[tuple[str, tuple, float]]` | explicit Gillespie event list |
 | `samples` | `list[dict[str, float]]` | post-burn-in sampled metrics used for summary means |
@@ -293,8 +296,8 @@ Good places where bugs can propagate:
   count.
 - `infection_count`: increments on infection but is not currently output or used
   downstream. This is real state, but currently diagnostic/dead-end state.
-- `baseline_adj`: built and returned, but ignored as `_baseline_adj` inside
-  `run_one_realization`.
+- `baseline_adj`: used during mortality/replacement to restore the permanent
+  within-community contacts for the replaced host slot.
 - `snapshot_state`: copies deaths but not
   `cumulative_intercommunity_transmissions`; this may be intentional, but
   snapshot metadata cannot directly access that counter from this snapshot dict

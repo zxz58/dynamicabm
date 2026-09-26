@@ -16,10 +16,13 @@ the new community model and its figure workflow.
 - `CommunitySIRSNetworkSnapshots.py`: selected-time community network snapshot
   PNGs plus metadata.
 
-The model supports 2 or 3 Watts-Strogatz communities, S/I/R/D states, waning
-immunity, disease-induced mortality, behavioral edge removal and restoration,
-inter-community movement edges, and heritable virulence with mutation at
-transmission.
+The model supports 2 or 3 Watts-Strogatz communities, S/I/R states with a
+death-event counter, waning immunity, disease-induced mortality, behavioral
+edge removal and restoration, inter-community movement edges, and heritable
+virulence with mutation at transmission. When a mortality event fires, the
+death is counted and the host slot immediately returns to susceptible: baseline
+within-community contacts are restored, while transient inter-community
+contacts incident to that host are cleared and must be rebuilt by movement.
 
 Inter-community edges are temporary. New long-range contacts are created by
 movement events controlled by `--phi-max` and `phi(v)`, while each active
@@ -130,7 +133,8 @@ python3 CommunitySIRSNetworkSnapshots.py \
 include prevalence, S/R/D fractions, mean infected virulence, virulence
 variance, cumulative deaths, cumulative cross-community transmissions, active
 edges, inter-community edges, realized clustering, `inter_edge_decay_rate`, and
-extinction status.
+extinction status. With immediate replacement after mortality, the D fraction
+is normally zero; use `cumulative_deaths` to measure mortality burden.
 
 When `--samples-out` is provided, the model also writes one row per sampled
 time point. Use this file for trajectory plots and later sensitivity-analysis
