@@ -13,6 +13,8 @@ the new community model and its figure workflow.
   sampled model output.
 - `CompareCommunitySIRS.py`: multi-scenario 1x2 comparison figure from
   multiple sampled model outputs.
+- `SweepCompareCommunitySIRS.py`: runs one-at-a-time sensitivity sweeps and
+  calls `CompareCommunitySIRS.py` on the generated sample files.
 - `CommunitySIRSNetworkSnapshots.py`: selected-time community network snapshot
   PNGs plus metadata.
 
@@ -104,6 +106,43 @@ python3 CompareCommunitySIRS.py \
   --out decay_comparison.png \
   --burn-in-time 100
 ```
+
+Run a one-at-a-time sensitivity sweep and build the comparison figure in one
+command. By default the sweep varies `phi_max` over `0.01,0.02,0.03`:
+
+```bash
+python3 SweepCompareCommunitySIRS.py
+```
+
+By default this writes per-scenario CSVs under `results/sweeps/phi_max/` and
+saves `results/sweeps/phi_max/community_sirs_phi_max_comparison.png`. This is
+not a Cartesian grid: each invocation sweeps one selected parameter while the
+others stay fixed. For a quick smoke run or custom phi levels:
+
+```bash
+python3 SweepCompareCommunitySIRS.py \
+  --sweep-values 0.005,0.02,0.05 \
+  --N 60 --K 3 \
+  --t-max 10 --burn-in-time 2 --sample-interval 1 \
+  --realizations 1 --seed 1 \
+  --out-dir /tmp/community_sweeps \
+  --quiet
+```
+
+Other supported one-at-a-time sweeps include `rho`, `eta`,
+`beta_min`/`beta_max`, `alpha_min`/`alpha_max`, and
+`gamma_min`/`gamma_max`:
+
+```bash
+python3 SweepCompareCommunitySIRS.py --sweep-param rho --sweep-values 0,0.05,0.1
+python3 SweepCompareCommunitySIRS.py --sweep-param eta --sweep-values 0,0.05,0.1
+python3 SweepCompareCommunitySIRS.py --sweep-param beta_max --sweep-values 0.2,0.5,0.8
+python3 SweepCompareCommunitySIRS.py --sweep-param alpha_max --sweep-values 0.01,0.05,0.1
+python3 SweepCompareCommunitySIRS.py --sweep-param gamma_max --sweep-values 0.08,0.12,0.2
+```
+
+The older `--phi-values` option remains available as a shortcut for
+`--sweep-param phi_max --sweep-values`.
 
 If multiple `--samples` inputs are passed to `PlotCommunitySIRS.py`, it still
 creates one separate four-panel diagnostic figure per file using label suffixes:

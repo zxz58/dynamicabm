@@ -8,6 +8,8 @@ The active community-model code lives at the repo root:
 - `CommunitySIRS.py` is the thin simulation CLI wrapper.
 - `PlotCommunitySIRS.py` creates single-scenario four-panel diagnostics.
 - `CompareCommunitySIRS.py` creates the multi-scenario 1x2 comparison figure.
+- `SweepCompareCommunitySIRS.py` runs one-at-a-time sensitivity sweeps and then
+  calls `CompareCommunitySIRS.py`.
 - `CommunitySIRSNetworkSnapshots.py` creates selected-time network snapshots.
 
 The old paper-port code has been moved into `paper_code/`. Treat that folder
@@ -85,6 +87,33 @@ not the raw number of inter-community edges. It counts infections where the
 source and newly infected host are in different communities. The right panel
 compares mean infected virulence over time across the supplied scenarios.
 
+For the default `phi_max` sweep (`0.01,0.02,0.03`):
+
+```bash
+python3 SweepCompareCommunitySIRS.py
+```
+
+This writes per-scenario summaries and samples to `results/sweeps/phi_max/` and
+creates `results/sweeps/phi_max/community_sirs_phi_max_comparison.png`. The
+runner is one-at-a-time, not a Cartesian grid: one invocation sweeps one
+selected parameter while all other fixed-value options stay fixed. For a tiny
+smoke run or custom levels:
+
+```bash
+python3 SweepCompareCommunitySIRS.py --sweep-values 0.005,0.02,0.05 --N 60 --K 3 --t-max 10 --burn-in-time 2 --sample-interval 1 --realizations 1 --seed 1 --out-dir /tmp/community_sweeps --quiet
+```
+
+Other supported parameters are `rho`, `eta`, `beta_min`, `beta_max`,
+`alpha_min`, `alpha_max`, `gamma_min`, and `gamma_max`:
+
+```bash
+python3 SweepCompareCommunitySIRS.py --sweep-param rho --sweep-values 0,0.05,0.1
+python3 SweepCompareCommunitySIRS.py --sweep-param eta --sweep-values 0,0.05,0.1
+python3 SweepCompareCommunitySIRS.py --sweep-param beta_max --sweep-values 0.2,0.5,0.8
+python3 SweepCompareCommunitySIRS.py --sweep-param alpha_max --sweep-values 0.01,0.05,0.1
+python3 SweepCompareCommunitySIRS.py --sweep-param gamma_max --sweep-values 0.08,0.12,0.2
+```
+
 Use the snapshot script for selected network states:
 
 ```bash
@@ -98,17 +127,17 @@ differently; infected nodes use a virulence colormap.
 ## Checks To Run
 
 ```bash
-python3 -m py_compile community_sirs.py CommunitySIRS.py PlotCommunitySIRS.py CompareCommunitySIRS.py CommunitySIRSNetworkSnapshots.py
+python3 -m py_compile community_sirs.py CommunitySIRS.py PlotCommunitySIRS.py CompareCommunitySIRS.py SweepCompareCommunitySIRS.py CommunitySIRSNetworkSnapshots.py
 python3 CommunitySIRS.py --N 90 --K 3 --t-max 20 --burn-in-time 5 --sample-interval 1 --realizations 2 --seed 1 --samples-out /tmp/community_samples.csv --out /tmp/community_summary.csv --quiet
 python3 PlotCommunitySIRS.py --samples /tmp/community_samples.csv --out /tmp/community_steady.png --burn-in-time 5
 python3 CompareCommunitySIRS.py --samples base:/tmp/community_samples.csv --out /tmp/community_comparison.png --burn-in-time 5
+python3 SweepCompareCommunitySIRS.py --N 60 --K 3 --t-max 10 --burn-in-time 2 --sample-interval 1 --realizations 1 --seed 1 --out-dir /tmp/community_sweeps --quiet
 python3 CommunitySIRSNetworkSnapshots.py --N 90 --K 3 --t-max 20 --burn-in-time 5 --snapshot-times 0,5,20 --seed 1 --out-dir /tmp/community_snapshots --quiet
 ```
 
 ## Likely Next Steps
 
-- Add a sensitivity runner that sweeps one or two parameters and writes
-  plotting-friendly CSVs.
+- Add heatmap plotting if Cartesian multi-parameter sweeps become necessary.
 - Add heatmap plotting for endemic prevalence, mean virulence, deaths, and
   inter-community edges once parameter sweeps become routine.
 - Consider performance improvements if larger `N`, longer `t-max`, or larger

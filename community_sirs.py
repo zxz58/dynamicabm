@@ -792,11 +792,11 @@ def build_arg_parser(prog: str = "CommunitySIRS") -> argparse.ArgumentParser:
                    help="Watts-Strogatz local mean degree target")
     p.add_argument("--rewiring-prob", type=float, default=0.01,
                    help="Watts-Strogatz rewiring probability")
-    p.add_argument("--t-max", type=float, default=500.0)
-    p.add_argument("--burn-in-time", type=float, default=100.0)
-    p.add_argument("--sample-interval", type=float, default=1.0)
-    p.add_argument("--realizations", type=int, default=10)
-    p.add_argument("--initial-prevalence", type=float, default=0.05)
+    p.add_argument("--t-max", type=float, default=5000.0)
+    p.add_argument("--burn-in-time", type=float, default=500.0)
+    p.add_argument("--sample-interval", type=float, default=10.0)
+    p.add_argument("--realizations", type=int, default=5)
+    p.add_argument("--initial-prevalence", type=float, default=0.1)
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--quiet", action="store_true", help="suppress progress output")
 
@@ -807,19 +807,19 @@ def build_arg_parser(prog: str = "CommunitySIRS") -> argparse.ArgumentParser:
                    help="per-transmission virulence mutation standard deviation")
 
     p.add_argument("--beta-min", type=float, default=0.0)
-    p.add_argument("--beta-max", type=float, default=0.08)
+    p.add_argument("--beta-max", type=float, default=0.2)
     p.add_argument("--alpha-min", type=float, default=0.0)
     p.add_argument("--alpha-max", type=float, default=0.01)
     p.add_argument("--gamma-min", type=float, default=0.02)
     p.add_argument("--gamma-max", type=float, default=0.12)
     p.add_argument("--delta-min", type=float, default=0.0)
     p.add_argument("--delta-max", type=float, default=0.03)
-    p.add_argument("--phi-max", type=float, default=0.02)
-    p.add_argument("--inter-edge-decay-rate", type=float, default=0.02,
+    p.add_argument("--phi-max", type=float, default=0.1)
+    p.add_argument("--inter-edge-decay-rate", type=float, default=0.1,
                    help="Gillespie removal rate per active inter-community edge. "
                         "Larger values shorten long-range edge lifetimes; tune "
                         "against --phi-max to target about 20-30 inter-community edges.")
-    p.add_argument("--rho", type=float, default=0.01,
+    p.add_argument("--rho", type=float, default=0.1,
                    help="waning immunity rate")
 
     shapes = ["linear", "concave", "convex"]
