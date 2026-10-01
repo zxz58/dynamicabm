@@ -131,7 +131,7 @@ python3 SweepCompareCommunitySIRS.py \
 
 Other supported one-at-a-time sweeps include `rho`, `eta`,
 `beta_min`/`beta_max`, `alpha_min`/`alpha_max`, and
-`gamma_min`/`gamma_max`:
+`gamma_min`/`gamma_max`, and `delta_min`/`delta_max`:
 
 ```bash
 python3 SweepCompareCommunitySIRS.py --sweep-param rho --sweep-values 0,0.05,0.1
@@ -139,6 +139,8 @@ python3 SweepCompareCommunitySIRS.py --sweep-param eta --sweep-values 0,0.05,0.1
 python3 SweepCompareCommunitySIRS.py --sweep-param beta_max --sweep-values 0.2,0.5,0.8
 python3 SweepCompareCommunitySIRS.py --sweep-param alpha_max --sweep-values 0.01,0.05,0.1
 python3 SweepCompareCommunitySIRS.py --sweep-param gamma_max --sweep-values 0.08,0.12,0.2
+python3 SweepCompareCommunitySIRS.py --sweep-param delta_min --sweep-values 0,0.01,0.03
+python3 SweepCompareCommunitySIRS.py --sweep-param delta_max --sweep-values 0,0.03,0.1
 ```
 
 The older `--phi-values` option remains available as a shortcut for

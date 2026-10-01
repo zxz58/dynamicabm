@@ -104,7 +104,8 @@ python3 SweepCompareCommunitySIRS.py --sweep-values 0.005,0.02,0.05 --N 60 --K 3
 ```
 
 Other supported parameters are `rho`, `eta`, `beta_min`, `beta_max`,
-`alpha_min`, `alpha_max`, `gamma_min`, and `gamma_max`:
+`alpha_min`, `alpha_max`, `gamma_min`, `gamma_max`, `delta_min`, and
+`delta_max`:
 
 ```bash
 python3 SweepCompareCommunitySIRS.py --sweep-param rho --sweep-values 0,0.05,0.1
@@ -112,6 +113,8 @@ python3 SweepCompareCommunitySIRS.py --sweep-param eta --sweep-values 0,0.05,0.1
 python3 SweepCompareCommunitySIRS.py --sweep-param beta_max --sweep-values 0.2,0.5,0.8
 python3 SweepCompareCommunitySIRS.py --sweep-param alpha_max --sweep-values 0.01,0.05,0.1
 python3 SweepCompareCommunitySIRS.py --sweep-param gamma_max --sweep-values 0.08,0.12,0.2
+python3 SweepCompareCommunitySIRS.py --sweep-param delta_min --sweep-values 0,0.01,0.03
+python3 SweepCompareCommunitySIRS.py --sweep-param delta_max --sweep-values 0,0.03,0.1
 ```
 
 Use the snapshot script for selected network states:

@@ -15,6 +15,8 @@ SWEEP_PARAMETERS = {
     "alpha_max": "--alpha-max",
     "gamma_min": "--gamma-min",
     "gamma_max": "--gamma-max",
+    "delta_min": "--delta-min",
+    "delta_max": "--delta-max",
     "rho": "--rho",
     "eta": "--inter-edge-decay-rate",
 }
@@ -48,9 +50,9 @@ def scenario_label(param: str, value: float) -> str:
 def build_arg_parser() -> argparse.ArgumentParser:
     """Define the generic one-at-a-time sweep CLI."""
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--sweep-param", choices=sorted(SWEEP_PARAMETERS), default="alpha_max",
+    p.add_argument("--sweep-param", choices=sorted(SWEEP_PARAMETERS), default="phi_max",
                    help="parameter to sweep one-at-a-time")
-    p.add_argument("--sweep-values", type=parse_float_list, default=parse_float_list("0.25,0.3,0.4,0.6,0.8"),
+    p.add_argument("--sweep-values", type=parse_float_list, default=parse_float_list("0.01,0.05,0.1,0.2,0.5"),
                    help="comma-separated values for --sweep-param")
     p.add_argument("--phi-values", type=parse_float_list, default=None,
                    help="backward-compatible alias for --sweep-param phi_max --sweep-values")
@@ -77,6 +79,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--alpha-max", type=float, default=0.01)
     p.add_argument("--gamma-min", type=float, default=0.01)
     p.add_argument("--gamma-max", type=float, default=0.1)
+    p.add_argument("--delta-min", type=float, default=0.0)
+    p.add_argument("--delta-max", type=float, default=0.03)
     p.add_argument("--rho", type=float, default=0.05)
     p.add_argument("--inter-edge-decay-rate", type=float, default=0.1)
     return p
@@ -92,6 +96,8 @@ def fixed_parameter_args(args, sweep_param: str, sweep_value: float) -> list[str
         "alpha_max": args.alpha_max,
         "gamma_min": args.gamma_min,
         "gamma_max": args.gamma_max,
+        "delta_min": args.delta_min,
+        "delta_max": args.delta_max,
         "rho": args.rho,
         "eta": args.inter_edge_decay_rate,
     }
